@@ -5,11 +5,36 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ai-knowledge-architect"
 version = "0.1.0"
-description = "High-Efficiency Local Markdown Knowledge Retrieval System"
+description = "High-Efficiency Local Markdown Knowledge Retrieval and Autonomous Agent System"
 readme = "README.md"
+license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 authors = [
     { name = "AI Knowledge Infrastructure Engineer" }
+]
+keywords = [
+    "markdown",
+    "retrieval",
+    "knowledge-base",
+    "sqlite",
+    "fts5",
+    "bm25",
+    "ai-agent",
+    "autonomous-research",
+    "documentation-engineering"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Text Processing :: Markup :: Markdown",
+    "Topic :: Database :: Database Engines/Servers"
 ]
 dependencies = [
     "PyYAML>=6.0",
