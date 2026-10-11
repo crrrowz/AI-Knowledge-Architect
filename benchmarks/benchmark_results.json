@@ -1,0 +1,27 @@
+{
+  "corpus": {
+    "total_documents": 50,
+    "total_sections": 200,
+    "total_tokens": 7825,
+    "db_size_bytes": 385024
+  },
+  "indexing": {
+    "initial_indexing_ms": 326.19,
+    "initial_docs_per_sec": 153.29,
+    "incremental_indexing_ms": 6.22
+  },
+  "retrieval": {
+    "queries_evaluated": 20,
+    "precision_at_1": 0.5,
+    "precision_at_3": 1.0,
+    "mrr": 0.7417,
+    "latency_p50_ms": 1.068,
+    "latency_p95_ms": 4.121,
+    "latency_p99_ms": 4.121
+  },
+  "token_budgeting": {
+    "avg_context_tokens": 286.0,
+    "corpus_tokens": 7825,
+    "context_reduction_percent": 96.35
+  }
+}
