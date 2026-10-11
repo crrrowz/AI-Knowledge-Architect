@@ -77,28 +77,65 @@ class IntegrityAuditor:
                     message=f"Duplicate document id '{doc_id}' shared across files: {paths}"
                 ))
 
-        # 2. Check broken links
+        # 2. Check broken links and anchors
         links = self.storage.get_all_links()
         broken_link_count = 0
         outgoing_docs: Set[str] = set()
         incoming_docs: Set[str] = set()
 
+        # Build map of document sections for anchor verification
+        doc_section_anchors: Dict[str, Set[str]] = {}
+        for doc in docs:
+            full_doc = self.storage.get_document(doc.path)
+            if full_doc:
+                anchors = set()
+                for sec in full_doc.sections:
+                    anchors.add(sec.section_id.lower())
+                    anchors.add(sec.heading.lower())
+                doc_section_anchors[doc.doc_id] = anchors
+                doc_section_anchors[doc.path] = anchors
+
         for link in links:
             outgoing_docs.add(link.source_doc_id)
-            target = link.target_ref.split("#")[0].strip()  # strip anchor
-            if not target:
+            target_raw = link.target_ref.strip()
+            if not target_raw:
                 continue
 
-            # Target could be doc_id, path, or path without .md
-            is_resolved = (
-                target in indexed_ids or
-                target in indexed_paths or
-                (target + ".md") in indexed_paths or
-                (target.replace(":", "/") + ".md") in indexed_paths
-            )
+            # Parse doc target and optional anchor (#section)
+            if "#" in target_raw:
+                doc_target, anchor = target_raw.split("#", 1)
+                doc_target = doc_target.strip()
+                anchor = anchor.strip().lower()
+            else:
+                doc_target = target_raw
+                anchor = None
 
-            if is_resolved:
-                incoming_docs.add(target)
+            resolved_doc_key = None
+            if doc_target in indexed_ids:
+                resolved_doc_key = doc_target
+            elif doc_target in indexed_paths:
+                resolved_doc_key = doc_target
+            elif (doc_target + ".md") in indexed_paths:
+                resolved_doc_key = doc_target + ".md"
+            elif (doc_target.replace(":", "/") + ".md") in indexed_paths:
+                resolved_doc_key = doc_target.replace(":", "/") + ".md"
+
+            if resolved_doc_key:
+                incoming_docs.add(doc_target)
+                # Verify anchor if specified
+                if anchor and resolved_doc_key in doc_section_anchors:
+                    valid_anchors = doc_section_anchors[resolved_doc_key]
+                    if anchor not in valid_anchors and anchor.replace("-", " ") not in valid_anchors:
+                        broken_link_count += 1
+                        issues.append(IntegrityIssue(
+                            severity="ERROR",
+                            issue_type="broken_link",
+                            doc_id=link.source_doc_id,
+                            path=link.source_doc_id,
+                            line_number=link.line_number,
+                            message=f"Broken section anchor '#{anchor}' in document '{doc_target}' from line {link.line_number}",
+                            details={"target_ref": link.target_ref, "link_type": link.link_type, "anchor": anchor}
+                        ))
             else:
                 broken_link_count += 1
                 issues.append(IntegrityIssue(

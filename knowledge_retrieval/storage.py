@@ -30,8 +30,8 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 
 CREATE TABLE IF NOT EXISTS documents (
-    doc_id TEXT PRIMARY KEY,
-    path TEXT UNIQUE NOT NULL,
+    path TEXT PRIMARY KEY,
+    doc_id TEXT NOT NULL,
     title TEXT NOT NULL,
     content_hash TEXT NOT NULL,
     size_bytes INTEGER NOT NULL,
@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS documents (
 
 CREATE TABLE IF NOT EXISTS sections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    doc_id TEXT NOT NULL REFERENCES documents(doc_id) ON DELETE CASCADE,
+    path TEXT NOT NULL REFERENCES documents(path) ON DELETE CASCADE,
+    doc_id TEXT NOT NULL,
     section_id TEXT NOT NULL,
     heading TEXT NOT NULL,
     heading_level INTEGER NOT NULL,
@@ -54,24 +55,29 @@ CREATE TABLE IF NOT EXISTS sections (
     end_line INTEGER NOT NULL,
     token_count INTEGER NOT NULL,
     content TEXT NOT NULL,
-    UNIQUE(doc_id, section_id)
+    UNIQUE(path, section_id)
 );
 
 CREATE TABLE IF NOT EXISTS links (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    source_doc_id TEXT NOT NULL REFERENCES documents(doc_id) ON DELETE CASCADE,
+    source_doc_id TEXT NOT NULL,
+    source_path TEXT NOT NULL REFERENCES documents(path) ON DELETE CASCADE,
     target_ref TEXT NOT NULL,
     link_type TEXT NOT NULL,
     line_number INTEGER NOT NULL,
     text TEXT NOT NULL
 );
 
+CREATE INDEX IF NOT EXISTS idx_documents_doc_id ON documents(doc_id);
+CREATE INDEX IF NOT EXISTS idx_sections_path ON sections(path);
 CREATE INDEX IF NOT EXISTS idx_sections_doc_id ON sections(doc_id);
-CREATE INDEX IF NOT EXISTS idx_links_source ON links(source_doc_id);
+CREATE INDEX IF NOT EXISTS idx_links_source_path ON links(source_path);
+CREATE INDEX IF NOT EXISTS idx_links_source_id ON links(source_doc_id);
 CREATE INDEX IF NOT EXISTS idx_links_target ON links(target_ref);
 
 -- Full-Text Search on Sections using FTS5 with BM25
 CREATE VIRTUAL TABLE IF NOT EXISTS sections_fts USING fts5(
+    path UNINDEXED,
     doc_id UNINDEXED,
     section_id UNINDEXED,
     heading,
@@ -83,6 +89,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS sections_fts USING fts5(
 
 -- Full-Text Search on Document overview
 CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
+    path UNINDEXED,
     doc_id UNINDEXED,
     title,
     tags,
@@ -190,21 +197,21 @@ class StorageEngine:
         now = time.time()
         with self.get_connection() as conn:
             with conn:
-                # 1. Clean up existing FTS entries for this doc_id
-                conn.execute("DELETE FROM sections_fts WHERE doc_id = ?", (doc.doc_id,))
-                conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (doc.doc_id,))
+                # 1. Clean up existing FTS entries for this path
+                conn.execute("DELETE FROM sections_fts WHERE path = ?", (doc.path,))
+                conn.execute("DELETE FROM documents_fts WHERE path = ?", (doc.path,))
 
                 # 2. Insert/replace document record
                 conn.execute(
                     """
                     INSERT OR REPLACE INTO documents (
-                        doc_id, path, title, content_hash, size_bytes, mtime,
+                        path, doc_id, title, content_hash, size_bytes, mtime,
                         frontmatter_json, tags_json, doc_type, status, token_count, indexed_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        doc.doc_id,
                         doc.path,
+                        doc.doc_id,
                         doc.title,
                         doc.content_hash,
                         doc.size_bytes,
@@ -218,21 +225,21 @@ class StorageEngine:
                     )
                 )
 
-                # 3. Delete old sections and links (foreign key CASCADE handles it if replaced,
-                # but DELETE explicitly ensures clean slate on update)
-                conn.execute("DELETE FROM sections WHERE doc_id = ?", (doc.doc_id,))
-                conn.execute("DELETE FROM links WHERE source_doc_id = ?", (doc.doc_id,))
+                # 3. Delete old sections and links for this path
+                conn.execute("DELETE FROM sections WHERE path = ?", (doc.path,))
+                conn.execute("DELETE FROM links WHERE source_path = ?", (doc.path,))
 
                 # 4. Insert sections
                 for sec in doc.sections:
                     conn.execute(
                         """
                         INSERT INTO sections (
-                            doc_id, section_id, heading, heading_level,
+                            path, doc_id, section_id, heading, heading_level,
                             start_line, end_line, token_count, content
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
+                            doc.path,
                             doc.doc_id,
                             sec.section_id,
                             sec.heading,
@@ -247,10 +254,11 @@ class StorageEngine:
                     conn.execute(
                         """
                         INSERT INTO sections_fts (
-                            doc_id, section_id, heading, content, tags, title
-                        ) VALUES (?, ?, ?, ?, ?, ?)
+                            path, doc_id, section_id, heading, content, tags, title
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
+                            doc.path,
                             doc.doc_id,
                             sec.section_id,
                             sec.heading,
@@ -265,11 +273,12 @@ class StorageEngine:
                     conn.execute(
                         """
                         INSERT INTO links (
-                            source_doc_id, target_ref, link_type, line_number, text
-                        ) VALUES (?, ?, ?, ?, ?)
+                            source_doc_id, source_path, target_ref, link_type, line_number, text
+                        ) VALUES (?, ?, ?, ?, ?, ?)
                         """,
                         (
                             doc.doc_id,
+                            doc.path,
                             link.target_ref,
                             link.link_type,
                             link.line_number,
@@ -281,10 +290,11 @@ class StorageEngine:
                 conn.execute(
                     """
                     INSERT INTO documents_fts (
-                        doc_id, title, tags, content
-                    ) VALUES (?, ?, ?, ?)
+                        path, doc_id, title, tags, content
+                    ) VALUES (?, ?, ?, ?, ?)
                     """,
                     (
+                        doc.path,
                         doc.doc_id,
                         doc.title,
                         tags_str,
@@ -302,14 +312,14 @@ class StorageEngine:
         with self.get_connection() as conn:
             with conn:
                 row = conn.execute(
-                    "SELECT doc_id FROM documents WHERE doc_id = ? OR path = ?",
+                    "SELECT path, doc_id FROM documents WHERE path = ? OR doc_id = ?",
                     (path_or_doc_id, path_or_doc_id)
                 ).fetchone()
                 if row:
-                    doc_id = row["doc_id"]
-                    conn.execute("DELETE FROM sections_fts WHERE doc_id = ?", (doc_id,))
-                    conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (doc_id,))
-                    conn.execute("DELETE FROM documents WHERE doc_id = ?", (doc_id,))
+                    p = row["path"]
+                    conn.execute("DELETE FROM sections_fts WHERE path = ?", (p,))
+                    conn.execute("DELETE FROM documents_fts WHERE path = ?", (p,))
+                    conn.execute("DELETE FROM documents WHERE path = ?", (p,))
 
     def get_all_documents(self) -> List[Document]:
         """Loads all documents (lightweight overview without full sections)."""

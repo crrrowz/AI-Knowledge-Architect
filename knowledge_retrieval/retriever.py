@@ -15,16 +15,20 @@ from knowledge_retrieval.models import (
 from knowledge_retrieval.storage import StorageEngine
 
 
-def _sanitize_fts_query(query: str) -> str:
-    """Prepares user query for safe FTS5 syntax, avoiding syntax errors from special chars."""
-    # Remove FTS5 operators like NOT, AND, OR if naked, and punctuation quotes
-    cleaned = re.sub(r'[^\w\s-]', ' ', query)
+_STOPWORDS = {
+    'what', 'is', 'the', 'a', 'an', 'of', 'to', 'in', 'for', 'on', 'with', 'as', 
+    'by', 'at', 'from', 'how', 'why', 'where', 'when', 'which', 'does', 'can', 'are', 'do'
+}
+
+
+def _extract_query_tokens(query: str) -> Tuple[List[str], List[str]]:
+    """Extracts raw and content tokens from query, splitting on punctuation."""
+    cleaned = re.sub(r'[^\w\s]', ' ', query)
     tokens = [t.strip() for t in cleaned.split() if t.strip()]
     if not tokens:
-        return ""
-    # Treat each word as prefix match token or exact token: "tok"*
-    fts_tokens = [f'"{t}"*' for t in tokens]
-    return " AND ".join(fts_tokens)
+        return [], []
+    content_tokens = [t for t in tokens if t.lower() not in _STOPWORDS]
+    return tokens, content_tokens or tokens
 
 
 class Retriever:
@@ -46,88 +50,104 @@ class Retriever:
         if not query:
             return []
 
-        fts_query = _sanitize_fts_query(query)
-        if not fts_query:
+        all_tokens, content_tokens = _extract_query_tokens(query)
+        if not content_tokens:
             return []
 
-        results: List[SearchResult] = []
-        with self.storage.get_connection() as conn:
-            # Query sections_fts using bm25() ranking function.
-            # bm25 weights: (heading=5.0, content=1.0, tags=2.0, title=3.0)
-            # In SQLite FTS5 bm25(table, w0, w1, ...): lower values mean better match (more negative/closer to 0).
-            # We invert to positive score for clarity: score = -bm25_val.
-            sql = """
-                SELECT 
-                    s.doc_id,
-                    d.path,
-                    d.title AS doc_title,
-                    d.tags_json,
-                    d.doc_type,
-                    s.section_id,
-                    s.heading,
-                    s.heading_level,
-                    s.start_line,
-                    s.end_line,
-                    s.token_count,
-                    snippet(sections_fts, 1, '«', '»', '...', 25) AS matched_snippet,
-                    bm25(sections_fts, 5.0, 1.0, 2.0, 3.0) AS bm25_score
-                FROM sections_fts
-                JOIN sections s ON sections_fts.doc_id = s.doc_id AND sections_fts.section_id = s.section_id
-                JOIN documents d ON s.doc_id = d.doc_id
-                WHERE sections_fts MATCH ?
-            """
-            params: List[Any] = [fts_query]
+        # 1. Primary query: AND of content tokens
+        and_fts = " AND ".join(f'"{t}"*' for t in content_tokens)
+        # 2. Secondary fallback query: OR of content tokens
+        or_fts = " OR ".join(f'"{t}"*' for t in content_tokens)
 
-            if doc_type:
-                sql += " AND d.doc_type = ?"
-                params.append(doc_type)
+        results_dict: Dict[Tuple[str, str], SearchResult] = {}
 
-            sql += " ORDER BY bm25_score ASC LIMIT ?"
-            params.append(limit * 2)
+        def _execute_fts(fts_match_expr: str):
+            with self.storage.get_connection() as conn:
+                sql = """
+                    SELECT 
+                        s.doc_id,
+                        d.path,
+                        d.title AS doc_title,
+                        d.tags_json,
+                        d.doc_type,
+                        s.section_id,
+                        s.heading,
+                        s.heading_level,
+                        s.start_line,
+                        s.end_line,
+                        s.token_count,
+                        s.content,
+                        snippet(sections_fts, 4, '«', '»', '...', 25) AS matched_snippet,
+                        bm25(sections_fts, 0.0, 0.0, 0.0, 5.0, 1.0, 2.0, 3.0) AS bm25_score
+                    FROM sections_fts
+                    JOIN sections s ON sections_fts.path = s.path AND sections_fts.section_id = s.section_id
+                    JOIN documents d ON s.path = d.path
+                    WHERE sections_fts MATCH ?
+                """
+                params: List[Any] = [fts_match_expr]
 
-            cursor = conn.execute(sql, params)
-            rows = cursor.fetchall()
+                if doc_type:
+                    sql += " AND d.doc_type = ?"
+                    params.append(doc_type)
 
-            for row in rows:
-                import json
-                doc_tags = json.loads(row["tags_json"])
-                if tags and not any(t.lower() in [dt.lower() for dt in doc_tags] for t in tags):
-                    continue
+                sql += " ORDER BY bm25_score ASC LIMIT ?"
+                params.append(limit * 2)
 
-                # Invert SQLite bm25 score (which is negative) to positive
-                # Lower bm25 value = better rank in SQLite FTS5
-                raw_score = -float(row["bm25_score"])
+                cursor = conn.execute(sql, params)
+                for row in cursor.fetchall():
+                    import json
+                    doc_tags = json.loads(row["tags_json"])
+                    if tags and not any(t.lower() in [dt.lower() for dt in doc_tags] for t in tags):
+                        continue
 
-                # Boost if query words appear in section heading or doc title
-                boost = 0.0
-                q_words = query.lower().split()
-                if any(w in row["heading"].lower() for w in q_words):
-                    boost += 2.0
-                if any(w in row["doc_title"].lower() for w in q_words):
-                    boost += 1.5
+                    # Verify query term coverage to prevent single-token false positives
+                    sec_text_lower = (row["heading"] + " " + row["content"] + " " + row["doc_title"]).lower()
+                    matched_terms_count = sum(1 for t in content_tokens if t.lower() in sec_text_lower)
+                    
+                    min_required = 1 if len(content_tokens) <= 1 else max(2, int(len(content_tokens) * 0.5))
+                    if matched_terms_count < min_required:
+                        continue
 
-                final_score = raw_score + boost
+                    raw_score = -float(row["bm25_score"])
 
-                if final_score < min_score:
-                    continue
+                    # Boost if query words appear in section heading or doc title
+                    boost = 0.0
+                    q_words = [t.lower() for t in content_tokens]
+                    if any(w in row["heading"].lower() for w in q_words):
+                        boost += 3.0
+                    if any(w in row["doc_title"].lower() for w in q_words):
+                        boost += 2.0
 
-                results.append(SearchResult(
-                    doc_id=row["doc_id"],
-                    path=row["path"],
-                    section_id=row["section_id"],
-                    heading=row["heading"],
-                    heading_level=row["heading_level"],
-                    start_line=row["start_line"],
-                    end_line=row["end_line"],
-                    snippet=row["matched_snippet"],
-                    score=round(final_score, 4),
-                    match_source="fts_bm25",
-                    token_count=row["token_count"],
-                    tags=doc_tags,
-                    doc_title=row["doc_title"]
-                ))
+                    final_score = raw_score + boost
+                    if final_score < min_score:
+                        continue
 
-        # Re-sort by final boosted score descending and clamp to limit
+                    key = (row["path"], row["section_id"])
+                    if key not in results_dict or final_score > results_dict[key].score:
+                        results_dict[key] = SearchResult(
+                            doc_id=row["doc_id"],
+                            path=row["path"],
+                            section_id=row["section_id"],
+                            heading=row["heading"],
+                            heading_level=row["heading_level"],
+                            start_line=row["start_line"],
+                            end_line=row["end_line"],
+                            snippet=row["matched_snippet"],
+                            score=round(final_score, 4),
+                            match_source="fts_bm25",
+                            token_count=row["token_count"],
+                            tags=doc_tags,
+                            doc_title=row["doc_title"]
+                        )
+
+        # First attempt: strict AND search
+        _execute_fts(and_fts)
+
+        # If strict search returned fewer results than limit, supplement with OR search
+        if len(results_dict) < limit and or_fts != and_fts:
+            _execute_fts(or_fts)
+
+        results = list(results_dict.values())
         results.sort(key=lambda x: x.score, reverse=True)
         return results[:limit]
 
