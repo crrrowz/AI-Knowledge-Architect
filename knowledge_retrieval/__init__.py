@@ -15,6 +15,21 @@ from knowledge_retrieval.models import (
     Section,
 )
 
+from knowledge_retrieval.auto_update_models import (
+    CandidateStatus,
+    ChangeCandidate,
+    ChangeType,
+    KnowledgeUpdateRecord,
+    MonitoredSource,
+    PolicyDecision,
+    ReviewQueueItem,
+    RiskLevel,
+    SourceType,
+    TrustTier,
+)
+from knowledge_retrieval.auto_update_store import AutoUpdateStore
+from knowledge_retrieval.auto_updater import AutoUpdater
+
 __all__ = [
     "KnowledgeEngine",
     "Document",
@@ -28,6 +43,18 @@ __all__ = [
     "IndexStats",
     "IntegrityIssue",
     "IntegrityReport",
+    "MonitoredSource",
+    "ChangeCandidate",
+    "KnowledgeUpdateRecord",
+    "ReviewQueueItem",
+    "SourceType",
+    "TrustTier",
+    "ChangeType",
+    "RiskLevel",
+    "PolicyDecision",
+    "CandidateStatus",
+    "AutoUpdateStore",
+    "AutoUpdater",
 ]
 
 __version__ = "0.1.0"

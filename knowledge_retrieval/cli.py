@@ -68,6 +68,45 @@ def main():
     audit_p = subparsers.add_parser("audit", help="Audit knowledge base integrity (broken links, duplicates)")
     audit_p.add_argument("--json", action="store_true", help="Output raw JSON")
 
+    # source-add
+    src_add_p = subparsers.add_parser("source-add", help="Register a monitored documentation site or GitHub repo")
+    src_add_p.add_argument("source_id", help="Unique source identifier")
+    src_add_p.add_argument("--type", choices=["website", "github_repo"], default="website", help="Source type")
+    src_add_p.add_argument("--name", required=True, help="Display name")
+    src_add_p.add_argument("--url", required=True, help="Canonical URL")
+    src_add_p.add_argument("--doc", required=True, help="Destination document ID")
+    src_add_p.add_argument("--topics", default="", help="Comma-separated topics")
+    src_add_p.add_argument("--trust", choices=["official", "trusted_partner", "community"], default="official", help="Trust tier")
+
+    # source-list
+    subparsers.add_parser("source-list", help="List all registered monitored sources")
+
+    # source-remove
+    src_rm_p = subparsers.add_parser("source-remove", help="Remove a monitored source")
+    src_rm_p.add_argument("source_id", help="Source identifier")
+
+    # check-updates
+    chk_p = subparsers.add_parser("check-updates", help="Check sources for updates and apply or queue")
+    chk_p.add_argument("--source", default=None, help="Specific source ID to check (default: all)")
+    chk_p.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    # review-list
+    subparsers.add_parser("review-list", help="List changes pending human review")
+
+    # review-approve
+    appr_p = subparsers.add_parser("review-approve", help="Approve and apply a candidate from the review queue")
+    appr_p.add_argument("candidate_id", help="Candidate ID")
+    appr_p.add_argument("--note", default=None, help="Approval note")
+
+    # review-reject
+    rej_p = subparsers.add_parser("review-reject", help="Reject a candidate from the review queue")
+    rej_p.add_argument("candidate_id", help="Candidate ID")
+    rej_p.add_argument("--note", default=None, help="Rejection note")
+
+    # update-history
+    hist_p = subparsers.add_parser("update-history", help="View audit trail of applied knowledge updates")
+    hist_p.add_argument("--limit", type=int, default=20, help="Maximum entries to show")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -170,6 +209,86 @@ def main():
                 for i in rep["issues"]:
                     loc = f"{i['path']}:{i['line_number']}" if i['line_number'] else i['path']
                     print(f"  [{i['severity']}] {i['issue_type'].upper()} @ {loc}: {i['message']}")
+
+    elif args.command == "source-add":
+        topics = [t.strip() for t in args.topics.split(",") if t.strip()]
+        res = engine.register_source(
+            source_id=args.source_id,
+            source_type=args.type,
+            display_name=args.name,
+            canonical_url=args.url,
+            destination_doc_id=args.doc,
+            topics=topics,
+            trust_tier=args.trust
+        )
+        print(f"[OK] Source '{res['source_id']}' registered successfully.")
+
+    elif args.command == "source-list":
+        sources = engine.list_sources()
+        print(f"=== Registered Monitored Sources ({len(sources)}) ===")
+        for s in sources:
+            status = "ENABLED" if s['enabled'] else "DISABLED"
+            print(f"- [{s['source_id']}] {s['display_name']} ({s['source_type']}) [{status}]")
+            print(f"  URL:         {s['canonical_url']}")
+            print(f"  Destination: {s['destination_doc_id']}")
+            print(f"  Trust:       {s['trust_tier']}")
+            if s['last_error']:
+                print(f"  Last Error:  {s['last_error']}")
+            print()
+
+    elif args.command == "source-remove":
+        ok = engine.remove_source(args.source_id)
+        if ok:
+            print(f"[OK] Source '{args.source_id}' removed.")
+        else:
+            print(f"[ERROR] Source '{args.source_id}' not found.", file=sys.stderr)
+            sys.exit(1)
+
+    elif args.command == "check-updates":
+        res = engine.check_updates(source_id=args.source)
+        if args.json:
+            print(json.dumps(res, indent=2))
+        else:
+            print("=== Source Update Check Results ===")
+            items = res if isinstance(res, list) else [res]
+            for it in items:
+                print(f"- Source: {it.get('source_id')}")
+                print(f"  Change: {it.get('change_type')}")
+                if it.get('action_taken'):
+                    print(f"  Action: {it.get('action_taken')} ({it.get('policy_decision')})")
+                print(f"  Message:{it.get('message') or it.get('error') or it.get('rationale')}")
+                print()
+
+    elif args.command == "review-list":
+        queue = engine.list_review_queue()
+        print(f"=== Changes Awaiting Human Review ({len(queue)}) ===")
+        for q in queue:
+            print(f"- [Queue ID {q['queue_id']}] Candidate: {q['candidate_id']}")
+            print(f"  Source:    {q['source_id']}")
+            print(f"  Risk:      {q['risk_level']}")
+            print(f"  Summary:   {q['change_summary']}")
+            print(f"  Rationale: {q['rationale']}")
+            print("  Preview:")
+            print("  " + q['content_preview'].replace("\n", "\n  "))
+            print()
+
+    elif args.command == "review-approve":
+        res = engine.approve_update(args.candidate_id, note=args.note)
+        print(f"[{res.get('status')}] {res.get('message')}")
+
+    elif args.command == "review-reject":
+        res = engine.reject_update(args.candidate_id, note=args.note)
+        print(f"[{res.get('status')}] {res.get('message')}")
+
+    elif args.command == "update-history":
+        hist = engine.list_update_history(limit=args.limit)
+        print(f"=== Knowledge Update Audit History ({len(hist)}) ===")
+        for h in hist:
+            t_iso = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(h['applied_at']))
+            print(f"- [{t_iso}] {h['doc_path']} by {h['applied_by']}")
+            print(f"  Candidate: {h['candidate_id']} (Source: {h['source_id']})")
+            print(f"  Summary:   {h['diff_summary']}")
+            print()
 
 
 if __name__ == "__main__":

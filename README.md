@@ -38,22 +38,32 @@ knowledge-cli context "How does the storage engine handle WAL?" --budget 1000
 
 # 5. Check repository health
 knowledge-cli audit
+
+# 6. Autonomous updates: register source & poll
+knowledge-cli source-add src-sqlite-repo --type github_repo --name "SQLite Mirror" --url "https://github.com/sqlite/sqlite" --doc dist-storage --topics "sqlite"
+knowledge-cli check-updates
+knowledge-cli review-list
 ```
 
 ## Running Tests and Benchmarks
 
 ```bash
-# Run acceptance tests (13 test cases covering all 12 core requirements)
+# Run full test suite (29 tests across core, independent audit, and auto-update pipeline)
 pytest tests/ -v
 
-# Run reproducible benchmark (50 documents, 20 queries)
+# Run reproducible benchmark
 python benchmarks/run_benchmark.py
+
+# Run multi-scale benchmark (50, 500, 5000 documents)
+python benchmarks/rigorous_benchmark.py
 ```
 
 ## Documentation
 
+- [Autonomous Knowledge Update Pipeline Design](docs/AUTO_UPDATE_DESIGN.md)
 - [Architecture Specification](docs/ARCHITECTURE.md)
 - [Architecture Decision Record (ADR 001)](docs/ADR-001-technology-selection.md)
 - [Document Schema Specification](docs/DOCUMENT-SCHEMA.md)
 - [Operations & Recovery Guide](docs/OPERATIONS-AND-RECOVERY.md)
+- [Independent Reliability Audit Report](docs/AUDIT_REPORT.md)
 - [Implementation Report & Verification Evidence](docs/IMPLEMENTATION_REPORT.md)

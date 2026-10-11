@@ -67,6 +67,45 @@ Scans for broken links, duplicate IDs, and orphaned documents:
 knowledge-cli audit [--json]
 ```
 
+### Auto-Update Pipeline Commands
+
+#### `source-add`
+Register a monitored documentation website or GitHub repository:
+```bash
+knowledge-cli source-add src-sqlite-repo --type github_repo --name "SQLite Mirror" --url "https://github.com/sqlite/sqlite" --doc dist-storage --topics "sqlite,storage" --trust official
+```
+
+#### `source-list`
+List all registered sources:
+```bash
+knowledge-cli source-list
+```
+
+#### `check-updates`
+Poll monitored sources, detect changes, verify evidence, and auto-apply or queue:
+```bash
+knowledge-cli check-updates [--source <source_id>] [--json]
+```
+
+#### `review-list`
+List changes requiring human review and approval:
+```bash
+knowledge-cli review-list
+```
+
+#### `review-approve` & `review-reject`
+Approve or reject a queued candidate:
+```bash
+knowledge-cli review-approve <candidate_id> --note "Approved by team lead"
+knowledge-cli review-reject <candidate_id> --note "Rejected: incompatible architecture"
+```
+
+#### `update-history`
+View audit history of applied updates:
+```bash
+knowledge-cli update-history [--limit 20]
+```
+
 ---
 
 ## 3. Python Agent API Usage
@@ -79,24 +118,30 @@ from knowledge_retrieval.api import KnowledgeEngine
 # Initialize engine
 engine = KnowledgeEngine(root_dir=".")
 
-# 1. Sync
+# 1. Sync & Search
 engine.sync_index()
-
-# 2. Search
 results = engine.search_knowledge("SQLite FTS5 storage", limit=3)
 
-# 3. Read specific section
-section = engine.read_section("storage-arch", "sqlite-fts5-engine")
-print(section["content"])
+# 2. Register external source for autonomous updates
+engine.register_source(
+    source_id="src-sqlite-docs",
+    source_type="website",
+    display_name="SQLite Official Documentation",
+    canonical_url="https://www.sqlite.org/fts5.html",
+    destination_doc_id="dist-storage",
+    topics=["sqlite", "fts5"],
+    trust_tier="official"
+)
 
-# 4. Assemble bounded context
-evidence = engine.get_source_context("How are logs replicated?", token_budget=800)
-if evidence["is_sufficient"]:
-    for excerpt in evidence["excerpts"]:
-        print(f"[{excerpt['path']}:{excerpt['start_line']}-{excerpt['end_line']}]")
-        print(excerpt["content"])
-else:
-    print("Insufficient evidence:", evidence["insufficient_reason"])
+# 3. Check for external updates (auto-applies safe updates, queues risky changes)
+update_results = engine.check_updates()
+
+# 4. Inspect human review queue
+queue_items = engine.list_review_queue()
+for item in queue_items:
+    print(f"Pending review: {item['candidate_id']} - {item['change_summary']}")
+    # Approve if verified
+    # engine.approve_update(item['candidate_id'], note="Verified manually")
 ```
 
 ---

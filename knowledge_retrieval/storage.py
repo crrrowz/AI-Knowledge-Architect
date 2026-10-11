@@ -96,6 +96,71 @@ CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
     content,
     tokenize = 'porter unicode61'
 );
+
+-- Auto-Update Pipeline Tables
+CREATE TABLE IF NOT EXISTS monitored_sources (
+    source_id TEXT PRIMARY KEY,
+    source_type TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    canonical_url TEXT NOT NULL,
+    topics_json TEXT NOT NULL,
+    destination_doc_id TEXT NOT NULL,
+    trust_tier TEXT NOT NULL,
+    trust_rationale TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    polling_interval_seconds INTEGER NOT NULL DEFAULT 3600,
+    last_checked_at REAL,
+    last_observed_change_at REAL,
+    last_fingerprint TEXT,
+    last_etag TEXT,
+    last_modified_header TEXT,
+    last_error TEXT,
+    retry_count INTEGER DEFAULT 0,
+    config_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS change_candidates (
+    candidate_id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL REFERENCES monitored_sources(source_id) ON DELETE CASCADE,
+    observed_at REAL NOT NULL,
+    source_published_at REAL,
+    prev_fingerprint TEXT,
+    curr_fingerprint TEXT NOT NULL,
+    change_type TEXT NOT NULL,
+    change_summary TEXT NOT NULL,
+    raw_content TEXT NOT NULL,
+    normalized_content TEXT NOT NULL,
+    affected_doc_ids_json TEXT NOT NULL,
+    affected_topics_json TEXT NOT NULL,
+    evidence_json TEXT NOT NULL,
+    risk_level TEXT NOT NULL,
+    policy_decision TEXT NOT NULL,
+    decision_rationale TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_update_history (
+    history_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    candidate_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    doc_path TEXT NOT NULL,
+    applied_at REAL NOT NULL,
+    diff_summary TEXT NOT NULL,
+    previous_content_hash TEXT NOT NULL,
+    new_content_hash TEXT NOT NULL,
+    applied_by TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS review_queue (
+    queue_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    candidate_id TEXT UNIQUE NOT NULL REFERENCES change_candidates(candidate_id) ON DELETE CASCADE,
+    source_id TEXT NOT NULL,
+    enqueued_at REAL NOT NULL,
+    resolved_at REAL,
+    resolution TEXT NOT NULL,
+    reviewer_note TEXT
+);
 """
 
 

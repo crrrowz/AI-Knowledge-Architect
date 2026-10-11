@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from knowledge_retrieval.auto_update_store import AutoUpdateStore
+from knowledge_retrieval.auto_updater import AutoUpdater
 from knowledge_retrieval.context import ContextAssembler
 from knowledge_retrieval.indexer import Indexer, IndexingReport
 from knowledge_retrieval.integrity import IntegrityAuditor
@@ -29,6 +31,8 @@ class KnowledgeEngine:
         self.retriever = Retriever(self.storage)
         self.assembler = ContextAssembler(self.retriever)
         self.auditor = IntegrityAuditor(self.root_dir, self.storage)
+        self.auto_update_store = AutoUpdateStore(self.storage)
+        self.auto_updater = AutoUpdater(self.root_dir, self.auto_update_store, self.indexer)
 
     def sync_index(self) -> IndexingReport:
         """Incrementally indexes new or modified markdown documents."""
@@ -178,3 +182,72 @@ class KnowledgeEngine:
                 for i in rep.issues
             ]
         }
+
+    # =========================================================================
+    # Autonomous Knowledge Update Pipeline Methods
+    # =========================================================================
+
+    def register_source(
+        self,
+        source_id: str,
+        source_type: str,
+        display_name: str,
+        canonical_url: str,
+        destination_doc_id: str,
+        topics: Optional[List[str]] = None,
+        trust_tier: str = "official",
+        trust_rationale: str = "Authoritative official repository",
+        polling_interval: int = 3600,
+        config: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Registers an official documentation website or GitHub repository for monitoring."""
+        src = self.auto_updater.register_source(
+            source_id=source_id,
+            source_type=source_type,
+            display_name=display_name,
+            canonical_url=canonical_url,
+            destination_doc_id=destination_doc_id,
+            topics=topics,
+            trust_tier=trust_tier,
+            trust_rationale=trust_rationale,
+            polling_interval=polling_interval,
+            config=config
+        )
+        return {
+            "source_id": src.source_id,
+            "display_name": src.display_name,
+            "canonical_url": src.canonical_url,
+            "destination_doc_id": src.destination_doc_id,
+            "trust_tier": src.trust_tier.value,
+            "status": "registered"
+        }
+
+    def list_sources(self, enabled_only: bool = False) -> List[Dict[str, Any]]:
+        """Lists all registered knowledge sources."""
+        return self.auto_updater.list_sources(enabled_only=enabled_only)
+
+    def remove_source(self, source_id: str) -> bool:
+        """Removes a source from monitoring."""
+        return self.auto_updater.remove_source(source_id)
+
+    def check_updates(self, source_id: Optional[str] = None) -> Any:
+        """Polls sources, verifies changes, and applies safe updates or enqueues for review."""
+        if source_id:
+            return self.auto_updater.check_source(source_id)
+        return self.auto_updater.check_all_sources()
+
+    def list_review_queue(self, status: str = "PENDING") -> List[Dict[str, Any]]:
+        """Lists changes requiring human review and approval."""
+        return self.auto_updater.list_review_queue(status=status)
+
+    def approve_update(self, candidate_id: str, note: Optional[str] = None) -> Dict[str, Any]:
+        """Approves and applies a candidate queued for review."""
+        return self.auto_updater.approve_review_item(candidate_id, note=note)
+
+    def reject_update(self, candidate_id: str, note: Optional[str] = None) -> Dict[str, Any]:
+        """Rejects a candidate queued for review."""
+        return self.auto_updater.reject_review_item(candidate_id, note=note)
+
+    def list_update_history(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """Returns the audit trail of applied knowledge updates."""
+        return self.auto_updater.list_history(limit=limit)
