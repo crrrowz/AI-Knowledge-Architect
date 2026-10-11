@@ -10,8 +10,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from knowledge_retrieval.api import KnowledgeEngine
+from knowledge_retrieval.author import DocumentAuthor, RetrievalVerifier
 from knowledge_retrieval.auto_update_models import PolicyDecision, RiskLevel
 from knowledge_retrieval.profile import KnowledgeLibraryProfile
+from knowledge_retrieval.researcher import ResearchCollector, ResearchDossier
 
 
 @dataclass
@@ -79,6 +81,13 @@ class KnowledgeAgent:
     def __init__(self, profile: KnowledgeLibraryProfile):
         self.profile = profile
         self.engine = KnowledgeEngine(root_dir=profile.root_dir, db_path=profile.db_path)
+        self.collector = ResearchCollector(
+            store=self.engine.auto_update_store,
+            retriever=self.engine.retriever,
+            fetcher=self.engine.auto_updater.fetcher
+        )
+        self.author = DocumentAuthor()
+        self.retrieval_verifier = RetrievalVerifier(self.engine)
 
     # =========================================================================
     # STAGE 1: INSPECT
@@ -143,32 +152,46 @@ class KnowledgeAgent:
         ops: List[AgentOperation] = []
         op_counter = 1
 
-        # 1. Plan creation of missing expected documents
+        # 1. Plan creation of missing expected documents using research and substantive authoring
         for miss in insp.missing_expected_docs:
             doc_id = miss["doc_id"]
             target_path = miss["expected_path"]
             title = doc_id.replace("_", " ").replace("-", " ").title()
-            initial_content = f"""---
-id: {doc_id}
-title: "{title}"
-tags: [{miss.get('directory', '').replace('/', ', ')}]
-type: reference
----
 
-# {title}
+            # Research topic from registered sources and existing knowledge
+            dossier = self.collector.research_topic(
+                topic_id=doc_id,
+                title=title,
+                topic_keywords=[miss.get("directory", ""), doc_id, title]
+            )
 
-{miss.get('description', 'Technical documentation and reference.')}
+            # Author substantive document conforming to required sections
+            authored_content, val_res = self.author.author_document(
+                dossier=dossier,
+                tags=[miss.get("directory", "")]
+            )
 
-## Overview
-Detailed content for {title}.
-"""
+            evidence_data = {
+                "expected_doc_id": doc_id,
+                "directory": miss.get("directory"),
+                "sources_consulted": dossier.sources_consulted,
+                "facts_count": len(dossier.facts),
+                "conflicts": dossier.conflicts,
+                "unresolved_questions": dossier.unresolved_questions,
+                "quality_validation": {
+                    "is_valid": val_res.is_valid,
+                    "token_count": val_res.token_count,
+                    "issues": val_res.issues
+                }
+            }
+
             ops.append(AgentOperation(
                 operation_id=f"op-{op_counter:03d}",
                 action="CREATE_DOCUMENT",
                 target_path=target_path,
-                reason=f"Goal satisfaction: Expected document '{doc_id}' is missing from '{miss.get('directory')}'.",
-                proposed_content=initial_content,
-                evidence={"expected_doc_id": doc_id, "directory": miss.get("directory")},
+                reason=f"Goal satisfaction: Researched and authored document '{doc_id}' for '{miss.get('directory')}'.",
+                proposed_content=authored_content,
+                evidence=evidence_data,
                 risk_level=RiskLevel.LOW
             ))
             op_counter += 1
@@ -364,10 +387,25 @@ Detailed content for {title}.
                     op.verification_status = "FAILED"
                     checks[op.target_path] = "STILL_EXISTS"
 
-        # Index check: verify newly created documents are retrievable
+        # Post-authoring retrieval verification: verify newly created documents are retrievable
         stats = self.engine.check_index_status()
         checks["indexed_doc_count"] = stats.total_documents
         checks["indexed_section_count"] = stats.total_sections
+        retrieval_checks = {}
+
+        for op in report.completed_operations:
+            if op.action == "CREATE_DOCUMENT" or op.action == "UPDATE_DOCUMENT":
+                doc_id = op.evidence.get("expected_doc_id")
+                if doc_id:
+                    ret_ok, ret_info = self.retrieval_verifier.verify_authored_fact(
+                        query=doc_id.replace("-", " "),
+                        expected_doc_id=doc_id
+                    )
+                    retrieval_checks[doc_id] = ret_info
+                    if not ret_ok:
+                        op.verification_status = "RETRIEVAL_FAILED"
+
+        checks["retrieval_verifications"] = retrieval_checks
 
         report.verification_evidence = {
             "verified_operations_count": verified_count,
