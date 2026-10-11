@@ -204,11 +204,53 @@ class AutoUpdater:
         return out
 
     def approve_review_item(self, candidate_id: str, note: Optional[str] = None) -> Dict[str, Any]:
+        """Revalidates and applies a human-approved candidate, preventing stale overwrites."""
         cand = self.store.get_candidate(candidate_id)
         if not cand:
             return {"error": f"Candidate '{candidate_id}' not found."}
 
-        # Apply update
+        # Verify candidate is currently pending in review queue
+        pending_items = self.store.list_review_queue(status="PENDING")
+        if not any(it.candidate_id == candidate_id for it in pending_items):
+            return {
+                "status": "ERROR",
+                "error": f"Candidate '{candidate_id}' is not in PENDING review state."
+            }
+
+        source = self.store.get_source(cand.source_id)
+        if not source:
+            return {"error": f"Source '{cand.source_id}' is no longer registered."}
+
+        # 1. Stale Check against Source: Verify source fingerprint has not moved past this candidate
+        if source.last_fingerprint and source.last_fingerprint != cand.curr_fingerprint:
+            return {
+                "status": "STALE_REJECTED",
+                "error": f"Stale Approval Blocked: Source '{cand.source_id}' has updated to a newer fingerprint ({source.last_fingerprint[:12]}) than this candidate ({cand.curr_fingerprint[:12]})."
+            }
+
+        # 2. Stale Check against Destination Document
+        if cand.affected_doc_ids:
+            target_doc_id = cand.affected_doc_ids[0]
+            existing_doc = self.indexer.storage.get_document(target_doc_id)
+            if existing_doc and existing_doc.mtime > cand.observed_at:
+                # Document was modified on disk after candidate observation
+                # Re-verify material conflicts with current content
+                conflict = self.verifier._detect_material_conflict(cand.normalized_content, existing_doc)
+                if conflict:
+                    return {
+                        "status": "STALE_REJECTED",
+                        "error": f"Stale Approval Blocked: Target document was modified and now conflicts: {conflict}"
+                    }
+
+        # 3. Security & Policy Revalidation
+        policy_decision, risk_level, rationale = self.verifier.verify_candidate(cand, source)
+        if policy_decision == PolicyDecision.REJECT:
+            return {
+                "status": "SECURITY_REJECTED",
+                "error": f"Revalidation Failed: Candidate rejected under current security policy: {rationale}"
+            }
+
+        # 4. Safe Apply
         ok, msg = self.updater.apply_candidate(cand, applied_by="HUMAN_REVIEWER")
         if ok:
             self.store.resolve_review_item(candidate_id, "APPROVED", note=note)

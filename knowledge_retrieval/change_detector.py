@@ -52,7 +52,7 @@ class ChangeDetector:
 
             meta = fetch_res.metadata or {}
             tag_name = meta.get("tag_name", "latest")
-            cid = f"cand-{source.source_id}-{tag_name}-{int(now)}"
+            cid = f"cand-{source.source_id}-{tag_name}-{int(now * 1000)}-{uuid.uuid4().hex[:6]}"
             summary = f"New GitHub release {tag_name} detected for {source.display_name}."
 
             candidate = ChangeCandidate(
@@ -97,7 +97,7 @@ class ChangeDetector:
                 return ChangeType.UNREACHABLE, None, fetch_res
 
             meta = fetch_res.metadata or {}
-            cid = f"cand-{source.source_id}-{int(now)}"
+            cid = f"cand-{source.source_id}-{int(now * 1000)}-{uuid.uuid4().hex[:6]}"
             summary = f"Documentation content update observed for {source.display_name}."
 
             candidate = ChangeCandidate(

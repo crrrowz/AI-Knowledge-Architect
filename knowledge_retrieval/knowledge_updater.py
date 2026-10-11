@@ -35,6 +35,11 @@ class KnowledgeUpdater:
             return False, "Candidate has no destination document ID."
 
         target_doc_id = candidate.affected_doc_ids[0]
+
+        # Path Traversal Guard: Reject any directory traversal indicators or absolute paths
+        if ".." in target_doc_id or target_doc_id.startswith(("/", "\\")) or (len(target_doc_id) > 1 and target_doc_id[1] == ":"):
+            return False, f"Security Violation: Target document ID '{target_doc_id}' contains directory traversal or absolute path."
+
         # Resolve disk path for target document
         existing_doc = self.indexer.storage.get_document(target_doc_id)
         if existing_doc:
@@ -46,7 +51,13 @@ class KnowledgeUpdater:
                 filename += ".md"
             doc_rel_path = filename
 
-        abs_path = os.path.join(self.root_dir, doc_rel_path)
+        # Path Traversal Guard: Ensure path cannot escape root_dir
+        root_resolved = Path(self.root_dir).resolve()
+        target_path_obj = (root_resolved / doc_rel_path).resolve()
+        if not target_path_obj.is_relative_to(root_resolved):
+            return False, f"Security Violation: Target path '{doc_rel_path}' escapes knowledge base root."
+
+        abs_path = str(target_path_obj)
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
 
         prev_content = ""
@@ -105,9 +116,18 @@ tags: {candidate.affected_topics}
 {update_block}
 """
 
-        # Write to disk atomically
-        with open(abs_path, "w", encoding="utf-8") as f:
-            f.write(new_content)
+        # Write to disk atomically using temporary file swap
+        tmp_file = abs_path + f".tmp.{os.getpid()}.{time.time_ns()}"
+        try:
+            with open(tmp_file, "w", encoding="utf-8") as f:
+                f.write(new_content)
+            os.replace(tmp_file, abs_path)
+        finally:
+            if os.path.exists(tmp_file):
+                try:
+                    os.remove(tmp_file)
+                except OSError:
+                    pass
 
         new_hash = hashlib.sha256(new_content.encode("utf-8")).hexdigest()
 
