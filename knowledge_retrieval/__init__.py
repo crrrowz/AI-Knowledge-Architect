@@ -15,6 +15,13 @@ from knowledge_retrieval.models import (
     Section,
 )
 
+from knowledge_retrieval.agent import (
+    AgentExecutionReport,
+    AgentOperation,
+    AgentPlan,
+    InspectionResult,
+    KnowledgeAgent,
+)
 from knowledge_retrieval.auto_update_models import (
     CandidateStatus,
     ChangeCandidate,
@@ -29,9 +36,24 @@ from knowledge_retrieval.auto_update_models import (
 )
 from knowledge_retrieval.auto_update_store import AutoUpdateStore
 from knowledge_retrieval.auto_updater import AutoUpdater
+from knowledge_retrieval.profile import (
+    KnowledgeLibraryProfile,
+    LibraryPermissions,
+    OrganizationRule,
+    QualityRules,
+)
 
 __all__ = [
     "KnowledgeEngine",
+    "KnowledgeAgent",
+    "KnowledgeLibraryProfile",
+    "LibraryPermissions",
+    "QualityRules",
+    "OrganizationRule",
+    "InspectionResult",
+    "AgentPlan",
+    "AgentOperation",
+    "AgentExecutionReport",
     "Document",
     "Section",
     "DocumentLink",

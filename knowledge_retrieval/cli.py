@@ -107,6 +107,33 @@ def main():
     hist_p = subparsers.add_parser("update-history", help="View audit trail of applied knowledge updates")
     hist_p.add_argument("--limit", type=int, default=20, help="Maximum entries to show")
 
+    # agent-inspect
+    ag_insp_p = subparsers.add_parser("agent-inspect", help="Inspect a knowledge library against its profile")
+    ag_insp_p.add_argument("profile_file", help="Path to library profile YAML file")
+    ag_insp_p.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    # agent-plan
+    ag_plan_p = subparsers.add_parser("agent-plan", help="Generate a goal-driven plan for a knowledge library")
+    ag_plan_p.add_argument("profile_file", help="Path to library profile YAML file")
+    ag_plan_p.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    # agent-run
+    ag_run_p = subparsers.add_parser("agent-run", help="Execute agent pipeline (inspect, plan, policy, execute, verify)")
+    ag_run_p.add_argument("profile_file", help="Path to library profile YAML file")
+    ag_run_p.add_argument("--dry-run", action="store_true", help="Preview proposed operations without modifying files")
+    ag_run_p.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    # profile-create
+    prof_create_p = subparsers.add_parser("profile-create", help="Create a starter Knowledge Library Profile")
+    prof_create_p.add_argument("output_file", help="Destination file path (YAML)")
+    prof_create_p.add_argument("--id", required=True, help="Unique library ID")
+    prof_create_p.add_argument("--root", required=True, help="Library root directory")
+    prof_create_p.add_argument("--goal", required=True, help="Primary goal description")
+
+    # profile-validate
+    prof_val_p = subparsers.add_parser("profile-validate", help="Validate a Knowledge Library Profile file")
+    prof_val_p.add_argument("profile_file", help="Path to profile file")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -289,6 +316,91 @@ def main():
             print(f"  Candidate: {h['candidate_id']} (Source: {h['source_id']})")
             print(f"  Summary:   {h['diff_summary']}")
             print()
+
+    elif args.command == "profile-create":
+        from knowledge_retrieval.profile import KnowledgeLibraryProfile
+        prof = KnowledgeLibraryProfile(
+            library_id=args.id,
+            name=args.id.replace("-", " ").title(),
+            root_dir=args.root,
+            goal=args.goal
+        )
+        prof.save(args.output_file)
+        print(f"[OK] Profile created: {args.output_file}")
+
+    elif args.command == "profile-validate":
+        from knowledge_retrieval.profile import KnowledgeLibraryProfile
+        try:
+            prof = KnowledgeLibraryProfile.load(args.profile_file)
+            print(f"[OK] Profile '{prof.library_id}' is valid. Root: {prof.root_dir}")
+        except Exception as e:
+            print(f"[ERROR] Invalid profile: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    elif args.command == "agent-inspect":
+        from knowledge_retrieval.agent import KnowledgeAgent
+        from knowledge_retrieval.profile import KnowledgeLibraryProfile
+        prof = KnowledgeLibraryProfile.load(args.profile_file)
+        agent = KnowledgeAgent(prof)
+        res = agent.inspect()
+        if args.json:
+            from dataclasses import asdict
+            print(json.dumps(asdict(res), indent=2))
+        else:
+            print(f"=== Knowledge Agent Inspection: {res.library_id} ===")
+            print(f"Root Directory:       {res.root_dir}")
+            print(f"Total Documents:      {res.total_docs}")
+            print(f"Total Sections:       {res.total_sections}")
+            print(f"Total Tokens:         {res.total_tokens:,}")
+            print(f"Missing Expected Docs:{len(res.missing_expected_docs)}")
+            for m in res.missing_expected_docs:
+                print(f"  - [{m['doc_id']}] -> {m['expected_path']}")
+            print(f"Broken Links:         {len(res.broken_links)}")
+            print(f"Pending Reviews:      {len(res.pending_review_items)}")
+
+    elif args.command == "agent-plan":
+        from knowledge_retrieval.agent import KnowledgeAgent
+        from knowledge_retrieval.profile import KnowledgeLibraryProfile
+        prof = KnowledgeLibraryProfile.load(args.profile_file)
+        agent = KnowledgeAgent(prof)
+        plan = agent.plan()
+        agent.policy_check(plan)
+        if args.json:
+            from dataclasses import asdict
+            print(json.dumps(asdict(plan), indent=2))
+        else:
+            print(f"=== Agent Plan: {plan.plan_id} (Goal: {plan.goal}) ===")
+            print(f"Total Operations: {len(plan.operations)}")
+            for op in plan.operations:
+                print(f"- [{op.operation_id}] {op.action} on {op.target_path}")
+                print(f"  Reason:   {op.reason}")
+                print(f"  Policy:   {op.policy_decision.value} ({op.risk_level.value})")
+                if op.decision_rationale:
+                    print(f"  Decision: {op.decision_rationale}")
+                print()
+
+    elif args.command == "agent-run":
+        from knowledge_retrieval.agent import KnowledgeAgent
+        from knowledge_retrieval.profile import KnowledgeLibraryProfile
+        prof = KnowledgeLibraryProfile.load(args.profile_file)
+        agent = KnowledgeAgent(prof)
+        rep = agent.run(dry_run=args.dry_run)
+        if args.json:
+            from dataclasses import asdict
+            print(json.dumps(asdict(rep), indent=2))
+        else:
+            mode = "DRY-RUN (PREVIEW)" if rep.dry_run else "LIVE EXECUTION"
+            print(f"=== Agent Execution Report [{mode}]: {rep.run_id} ===")
+            print(f"Completed Operations: {len(rep.completed_operations)}")
+            for op in rep.completed_operations:
+                print(f"  - [{op.operation_id}] {op.action} @ {op.target_path} -> {op.execution_status} ({op.verification_status})")
+            print(f"Skipped Operations:   {len(rep.skipped_operations)}")
+            print(f"Failed Operations:    {len(rep.failed_operations)}")
+            if rep.unresolved_issues:
+                print("Unresolved Issues:")
+                for u in rep.unresolved_issues:
+                    print(f"  - {u}")
+            print(f"Duration:             {rep.duration_seconds:.2f}s")
 
 
 if __name__ == "__main__":
