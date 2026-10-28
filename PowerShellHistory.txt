@@ -1,0 +1,9 @@
+knowledge-cli context "How does the storage engine handle WAL?" --budget 1000
+knowledge-cli sync
+knowledge-cli status
+knowledge-cli search "storage architecture" --limit 3
+knowledge-cli context "How does the storage engine handle WAL?" --budget 1000
+knowledge-cli audit
+knowledge-cli source-add src-sqlite-repo --type github_repo \
+  --name "SQLite Mirror" --url "https://github.com/sqlite/sqlite" \
+  --doc dist-storage --topics "sqlite,storage"
